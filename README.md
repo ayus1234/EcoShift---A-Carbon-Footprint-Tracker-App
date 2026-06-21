@@ -4,6 +4,17 @@
 
 ---
 
+## 🎯 Challenge Details
+- **Chosen Vertical**: Environmental Sustainability & Habit Tracking
+- **Approach and Logic**: The application focuses on translating abstract environmental impact into tangible metrics. It provides an intuitive interface for users to log daily sustainable actions. The backend logically calculates CO₂ savings based on predefined, scientifically-backed metrics for each action, storing this data in a lightweight, local SQLite database for speed and reliability.
+- **How the Solution Works**: Users create a personal profile, select sustainability habits they wish to track, and regularly log their actions. The dashboard dynamically aggregates this data to show both individual milestones and collective community impact, leveraging Chart.js for real-time visualization. Data can be seamlessly exported for presentation.
+- **Assumptions Made**: 
+  - Assumes standard CO₂ emission factors for activities (e.g., 0.21 kg CO₂/km for driving vs cycling).
+  - Assumes users will accurately and honestly self-report their activities.
+  - Designed for a single-server deployment during the prototype phase.
+
+---
+
 ## 🔗 Live Demo
 
 - [EcoShift – A Carbon Footprint Tracker App](https://ecoshift-a-carbon-footprint-tracker-app.onrender.com/)

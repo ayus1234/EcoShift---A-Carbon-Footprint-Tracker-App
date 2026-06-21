@@ -3,11 +3,21 @@ const sqlite3 = require('sqlite3').verbose();
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const path = require('path');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
+app.use(helmet({
+  contentSecurityPolicy: false // disabled to allow inline scripts if any
+}));
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000 // generous limit to avoid breaking the prototype unexpectedly
+});
+app.use(limiter);
 app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static('public'));
@@ -346,10 +356,12 @@ app.get('/export', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`CO₂ Footprint Challenge Server running on port ${PORT}`);
-  console.log(`Visit http://localhost:${PORT} to access the application`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`CO₂ Footprint Challenge Server running on port ${PORT}`);
+    console.log(`Visit http://localhost:${PORT} to access the application`);
+  });
+}
 
 // Graceful shutdown
 process.on('SIGINT', () => {
@@ -362,3 +374,5 @@ process.on('SIGINT', () => {
     process.exit(0);
   });
 });
+
+module.exports = app;
