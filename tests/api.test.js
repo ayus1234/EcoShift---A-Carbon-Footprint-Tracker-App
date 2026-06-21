@@ -35,4 +35,49 @@ describe('EcoShift API Endpoints', () => {
     expect(res.statusCode).toEqual(200);
     expect(res.headers['content-type']).toMatch(/html/);
   });
+
+  describe('POST Endpoints', () => {
+    let testUserId;
+
+    it('POST /api/users should create a new user', async () => {
+      const res = await request(app).post('/api/users').send({
+        name: 'Test User',
+        email: 'test@example.com',
+        internship_start_date: '2026-01-01'
+      });
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toHaveProperty('id');
+      testUserId = res.body.id;
+    });
+
+    it('POST /api/users should validate input', async () => {
+      const res = await request(app).post('/api/users').send({
+        name: '',
+        email: 'invalid-email'
+      });
+      expect(res.statusCode).toEqual(400);
+      expect(res.body).toHaveProperty('errors');
+    });
+
+    it('POST /api/users/:userId/habits should save habits for user', async () => {
+      const res = await request(app).post(`/api/users/${testUserId}/habits`).send({
+        habitIds: [1, 2, 3]
+      });
+      expect(res.statusCode).toEqual(200);
+      expect(res.body.message).toEqual('Habits selected successfully');
+    });
+
+    it('POST /api/logs should log an action', async () => {
+      const res = await request(app).post('/api/logs').send({
+        user_id: testUserId,
+        habit_id: 1,
+        date: '2026-06-21',
+        quantity: 5,
+        notes: 'Test note'
+      });
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toHaveProperty('id');
+      expect(res.body.message).toEqual('Action logged successfully');
+    });
+  });
 });

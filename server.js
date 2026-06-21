@@ -5,6 +5,10 @@ const cors = require('cors');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const { body, query, param, validationResult } = require('express-validator');
+
+// Simple in-memory cache for habits
+let habitsCache = null;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -23,7 +27,13 @@ app.use(bodyParser.json());
 app.use(express.static('public'));
 
 // Initialize SQLite database
-const db = new sqlite3.Database('./co2_challenge.db');
+const dbPath = process.env.NODE_ENV === 'test' ? ':memory:' : './co2_challenge.db';
+const db = new sqlite3.Database(dbPath);
+
+const handleDbError = (res, err) => {
+  console.error('[DB Error]:', err.message);
+  res.status(500).json({ error: 'Internal server error' });
+};
 
 // Create tables
 db.serialize(() => {
@@ -70,6 +80,12 @@ db.serialize(() => {
     FOREIGN KEY (habit_id) REFERENCES habits (id)
   )`);
 
+  // Performance indices
+  db.run(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_users_name ON users(name)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_user_habits_user_id ON user_habits(user_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_daily_logs_user_date ON daily_logs(user_id, date)`);
+
   // Insert default habits with CO₂ savings data
   const defaultHabits = [
     { name: 'Cycling instead of driving', description: 'Replace car commute with bicycle', co2_savings: 0.21, unit: 'km', category: 'Transport' },
@@ -95,17 +111,27 @@ db.serialize(() => {
 
 // Get all available habits
 app.get('/api/habits', (req, res) => {
+  if (habitsCache) {
+    return res.json(habitsCache);
+  }
   db.all('SELECT * FROM habits ORDER BY category, name', (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+    if (err) return handleDbError(res, err);
+    habitsCache = rows;
     res.json(rows);
   });
 });
 
 // Create new user
-app.post('/api/users', (req, res) => {
+app.post('/api/users', [
+  body('name').trim().notEmpty().withMessage('Name is required').escape(),
+  body('email').optional({ checkFalsy: true }).isEmail().withMessage('Invalid email format').normalizeEmail(),
+  body('internship_start_date').notEmpty().isDate().withMessage('Valid date is required')
+], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
   const { name, email, internship_start_date } = req.body;
   
   // First check if user already exists (by name or email)
@@ -118,10 +144,7 @@ app.post('/api/users', (req, res) => {
   }
   
   db.get(checkQuery, checkParams, (err, existingUser) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+    if (err) return handleDbError(res, err);
     
     if (existingUser) {
       // User already exists
@@ -147,10 +170,7 @@ app.post('/api/users', (req, res) => {
     // No duplicate found, create new user
     db.run('INSERT INTO users (name, email, internship_start_date) VALUES (?, ?, ?)', 
       [name, email, internship_start_date], function(err) {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
+      if (err) return handleDbError(res, err);
       res.json({ id: this.lastID, name, email, internship_start_date });
     });
   });
@@ -159,25 +179,28 @@ app.post('/api/users', (req, res) => {
 // Get all users
 app.get('/api/users', (req, res) => {
   db.all('SELECT * FROM users ORDER BY created_at DESC', (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+    if (err) return handleDbError(res, err);
     res.json(rows);
   });
 });
 
 // Select habits for user
-app.post('/api/users/:userId/habits', (req, res) => {
+app.post('/api/users/:userId/habits', [
+  param('userId').isInt().toInt(),
+  body('habitIds').isArray().withMessage('habitIds must be an array'),
+  body('habitIds.*').isInt().toInt()
+], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
   const userId = req.params.userId;
   const { habitIds } = req.body;
   
   // First, clear existing selections
   db.run('DELETE FROM user_habits WHERE user_id = ?', [userId], (err) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+    if (err) return handleDbError(res, err);
     
     // Insert new selections
     const stmt = db.prepare('INSERT INTO user_habits (user_id, habit_id) VALUES (?, ?)');
@@ -185,10 +208,7 @@ app.post('/api/users/:userId/habits', (req, res) => {
       stmt.run(userId, habitId);
     });
     stmt.finalize((err) => {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
+      if (err) return handleDbError(res, err);
       res.json({ message: 'Habits selected successfully' });
     });
   });
@@ -205,23 +225,32 @@ app.get('/api/users/:userId/habits', (req, res) => {
     WHERE uh.user_id = ? 
     ORDER BY h.category, h.name
   `, [userId], (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+    if (err) return handleDbError(res, err);
     res.json(rows);
   });
 });
 
 // Log daily action
-app.post('/api/logs', (req, res) => {
+app.post('/api/logs', [
+  body('user_id').isInt().toInt(),
+  body('habit_id').isInt().toInt(),
+  body('date').isDate().withMessage('Valid date is required'),
+  body('quantity').optional().isFloat({ min: 0.1 }).toFloat(),
+  body('notes').optional().trim().escape()
+], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
   const { user_id, habit_id, date, quantity, notes } = req.body;
   
   // Get CO₂ savings for this habit
   db.get('SELECT co2_savings_per_action FROM habits WHERE id = ?', [habit_id], (err, habit) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
+    if (err) return handleDbError(res, err);
+    
+    if (!habit) {
+      return res.status(404).json({ error: 'Habit not found' });
     }
     
     const co2_saved = habit.co2_savings_per_action * (quantity || 1);
@@ -230,10 +259,7 @@ app.post('/api/logs', (req, res) => {
       INSERT INTO daily_logs (user_id, habit_id, date, quantity, co2_saved, notes) 
       VALUES (?, ?, ?, ?, ?, ?)
     `, [user_id, habit_id, date, quantity || 1, co2_saved, notes], function(err) {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
+      if (err) return handleDbError(res, err);
       res.json({ 
         id: this.lastID, 
         co2_saved,
@@ -264,10 +290,7 @@ app.get('/api/users/:userId/logs', (req, res) => {
   query += ' ORDER BY dl.date DESC, dl.logged_at DESC';
   
   db.all(query, params, (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+    if (err) return handleDbError(res, err);
     res.json(rows);
   });
 });
@@ -286,10 +309,7 @@ app.get('/api/dashboard', (req, res) => {
   }
   
   db.get(co2Query, co2Params, (err, co2Result) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+    if (err) return handleDbError(res, err);
     
     // Get user statistics
     let userQuery = `
@@ -307,10 +327,7 @@ app.get('/api/dashboard', (req, res) => {
     userQuery += ' GROUP BY u.id, u.name ORDER BY total_co2_saved DESC';
     
     db.all(userQuery, userParams, (err, userStats) => {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
+      if (err) return handleDbError(res, err);
       
       // Get habit statistics
       let habitQuery = `
@@ -328,10 +345,7 @@ app.get('/api/dashboard', (req, res) => {
       habitQuery += ' GROUP BY h.id, h.name, h.category ORDER BY total_co2_saved DESC';
       
       db.all(habitQuery, habitParams, (err, habitStats) => {
-        if (err) {
-          res.status(500).json({ error: err.message });
-          return;
-        }
+        if (err) return handleDbError(res, err);
         
         res.json({
           total_co2_saved: co2Result.total_co2_saved || 0,
