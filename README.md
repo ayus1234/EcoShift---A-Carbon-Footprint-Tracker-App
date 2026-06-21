@@ -13,6 +13,12 @@
   - Assumes users will accurately and honestly self-report their activities.
   - Designed for a single-server deployment during the prototype phase.
 
+## ✅ Challenge Compliance
+- **Repository Size**: Strictly under 10MB.
+- **Git Strategy**: Entire project is housed within a single `main` branch.
+- **Public Visibility**: The GitHub repository is configured as public.
+- **Tech Stack**: HTML, CSS, JavaScript (Node/Express backend, SQLite DB).
+
 ---
 
 ## 🔗 Live Demo

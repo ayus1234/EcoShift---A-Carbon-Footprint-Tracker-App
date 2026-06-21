@@ -45,7 +45,7 @@ describe('EcoShift API Endpoints', () => {
         email: 'test@example.com',
         internship_start_date: '2026-01-01'
       });
-      expect(res.statusCode).toEqual(200);
+      expect(res.statusCode).toEqual(201);
       expect(res.body).toHaveProperty('id');
       testUserId = res.body.id;
     });
@@ -63,7 +63,7 @@ describe('EcoShift API Endpoints', () => {
       const res = await request(app).post(`/api/users/${testUserId}/habits`).send({
         habitIds: [1, 2, 3]
       });
-      expect(res.statusCode).toEqual(200);
+      expect(res.statusCode).toEqual(201);
       expect(res.body.message).toEqual('Habits selected successfully');
     });
 
@@ -75,9 +75,33 @@ describe('EcoShift API Endpoints', () => {
         quantity: 5,
         notes: 'Test note'
       });
-      expect(res.statusCode).toEqual(200);
+      expect(res.statusCode).toEqual(201);
       expect(res.body).toHaveProperty('id');
       expect(res.body.message).toEqual('Action logged successfully');
+    });
+  });
+
+  describe('Edge Cases and Additional Tests', () => {
+    it('GET /api/unknown-route should return 404', async () => {
+      const res = await request(app).get('/api/unknown-route');
+      expect(res.statusCode).toEqual(404);
+      expect(res.body).toHaveProperty('error', 'Endpoint not found');
+    });
+
+    it('GET /api/dashboard with query parameters should filter data', async () => {
+      const res = await request(app)
+        .get('/api/dashboard')
+        .query({ startDate: '2026-06-01', endDate: '2026-06-30' });
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toHaveProperty('total_co2_saved');
+    });
+
+    it('GET /api/dashboard with invalid query parameters should fail', async () => {
+      const res = await request(app)
+        .get('/api/dashboard')
+        .query({ startDate: 'invalid-date' });
+      expect(res.statusCode).toEqual(400);
+      expect(res.body).toHaveProperty('errors');
     });
   });
 });

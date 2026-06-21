@@ -15,7 +15,15 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(helmet({
-  contentSecurityPolicy: false // disabled to allow inline scripts if any
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "cdn.jsdelivr.net"],
+      styleSrc: ["'self'", "'unsafe-inline'", "cdn.jsdelivr.net", "cdnjs.cloudflare.com"],
+      fontSrc: ["'self'", "cdnjs.cloudflare.com"],
+      imgSrc: ["'self'", "data:"]
+    }
+  }
 }));
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -107,6 +115,44 @@ db.serialize(() => {
   stmt.finalize();
 });
 
+// Validation Middleware
+const validateUserCreation = [
+  body('name').trim().notEmpty().withMessage('Name is required').escape(),
+  body('email').optional({ checkFalsy: true }).isEmail().withMessage('Invalid email format').normalizeEmail(),
+  body('internship_start_date').notEmpty().isDate().withMessage('Valid date is required')
+];
+
+const validateHabitSelection = [
+  param('userId').isInt().toInt(),
+  body('habitIds').isArray().withMessage('habitIds must be an array'),
+  body('habitIds.*').isInt().toInt()
+];
+
+const validateLogEntry = [
+  body('user_id').isInt().toInt(),
+  body('habit_id').isInt().toInt(),
+  body('date').isDate().withMessage('Valid date is required'),
+  body('quantity').optional().isFloat({ min: 0.1 }).toFloat(),
+  body('notes').optional().trim().escape()
+];
+
+const validateDateRange = [
+  query('startDate').optional({ checkFalsy: true }).isDate().withMessage('Valid start date required'),
+  query('endDate').optional({ checkFalsy: true }).isDate().withMessage('Valid end date required')
+];
+
+const validateUserIdParam = [
+  param('userId').isInt().toInt()
+];
+
+const handleValidationErrors = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+  next();
+};
+
 // API Routes
 
 // Get all available habits
@@ -122,16 +168,7 @@ app.get('/api/habits', (req, res) => {
 });
 
 // Create new user
-app.post('/api/users', [
-  body('name').trim().notEmpty().withMessage('Name is required').escape(),
-  body('email').optional({ checkFalsy: true }).isEmail().withMessage('Invalid email format').normalizeEmail(),
-  body('internship_start_date').notEmpty().isDate().withMessage('Valid date is required')
-], (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
+app.post('/api/users', validateUserCreation, handleValidationErrors, (req, res) => {
   const { name, email, internship_start_date } = req.body;
   
   // First check if user already exists (by name or email)
@@ -171,7 +208,7 @@ app.post('/api/users', [
     db.run('INSERT INTO users (name, email, internship_start_date) VALUES (?, ?, ?)', 
       [name, email, internship_start_date], function(err) {
       if (err) return handleDbError(res, err);
-      res.json({ id: this.lastID, name, email, internship_start_date });
+      res.status(201).json({ id: this.lastID, name, email, internship_start_date });
     });
   });
 });
@@ -185,16 +222,7 @@ app.get('/api/users', (req, res) => {
 });
 
 // Select habits for user
-app.post('/api/users/:userId/habits', [
-  param('userId').isInt().toInt(),
-  body('habitIds').isArray().withMessage('habitIds must be an array'),
-  body('habitIds.*').isInt().toInt()
-], (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
+app.post('/api/users/:userId/habits', validateHabitSelection, handleValidationErrors, (req, res) => {
   const userId = req.params.userId;
   const { habitIds } = req.body;
   
@@ -209,13 +237,13 @@ app.post('/api/users/:userId/habits', [
     });
     stmt.finalize((err) => {
       if (err) return handleDbError(res, err);
-      res.json({ message: 'Habits selected successfully' });
+      res.status(201).json({ message: 'Habits selected successfully' });
     });
   });
 });
 
 // Get user's selected habits
-app.get('/api/users/:userId/habits', (req, res) => {
+app.get('/api/users/:userId/habits', validateUserIdParam, handleValidationErrors, (req, res) => {
   const userId = req.params.userId;
   
   db.all(`
@@ -231,18 +259,7 @@ app.get('/api/users/:userId/habits', (req, res) => {
 });
 
 // Log daily action
-app.post('/api/logs', [
-  body('user_id').isInt().toInt(),
-  body('habit_id').isInt().toInt(),
-  body('date').isDate().withMessage('Valid date is required'),
-  body('quantity').optional().isFloat({ min: 0.1 }).toFloat(),
-  body('notes').optional().trim().escape()
-], (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
+app.post('/api/logs', validateLogEntry, handleValidationErrors, (req, res) => {
   const { user_id, habit_id, date, quantity, notes } = req.body;
   
   // Get CO₂ savings for this habit
@@ -260,7 +277,7 @@ app.post('/api/logs', [
       VALUES (?, ?, ?, ?, ?, ?)
     `, [user_id, habit_id, date, quantity || 1, co2_saved, notes], function(err) {
       if (err) return handleDbError(res, err);
-      res.json({ 
+      res.status(201).json({ 
         id: this.lastID, 
         co2_saved,
         message: 'Action logged successfully' 
@@ -270,7 +287,7 @@ app.post('/api/logs', [
 });
 
 // Get user's logs
-app.get('/api/users/:userId/logs', (req, res) => {
+app.get('/api/users/:userId/logs', [...validateUserIdParam, ...validateDateRange], handleValidationErrors, (req, res) => {
   const userId = req.params.userId;
   const { startDate, endDate } = req.query;
   
@@ -296,7 +313,7 @@ app.get('/api/users/:userId/logs', (req, res) => {
 });
 
 // Get dashboard data
-app.get('/api/dashboard', (req, res) => {
+app.get('/api/dashboard', validateDateRange, handleValidationErrors, (req, res) => {
   const { startDate, endDate } = req.query;
   
   // Get total CO₂ saved
@@ -367,6 +384,11 @@ app.get('/', (req, res) => {
 // Serve the export page
 app.get('/export', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'export.html'));
+});
+
+// 404 Handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
 });
 
 // Start server
